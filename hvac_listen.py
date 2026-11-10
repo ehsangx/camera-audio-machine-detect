@@ -113,8 +113,9 @@ def fine_feature(x16, ts):
 
 
 class Recorder:
-    def __init__(self, url, out, on_minute=None):
+    def __init__(self, url, out, on_minute=None, video_dir=None):
         self.url, self.out, self.on_minute = url, out, on_minute
+        self.video_dir = video_dir
         self.stop = False
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, "meta.json"), "w") as f:
@@ -147,9 +148,15 @@ class Recorder:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(minute * 60))
 
     def run(self):
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
-               "-i", self.url, "-vn", "-ac", "1", "-ar", str(SR),
-               "-f", "s16le", "-"]
+        cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp"]
+        if self.video_dir:
+            # ONE RTSP session, two outputs: audio -> pipe, key frames only (~1 per 4 s, cheap to decode) -> RAM-disk jpgs
+            os.makedirs(self.video_dir, exist_ok=True)
+            cmd += ["-skip_frame", "nokey", "-i", self.url, "-map", "0:a:0", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-",
+                    "-map", "0:v:0", "-vsync", "0", "-vf", "scale=960:-1", "-q:v", "4", "-f", "image2", "-strftime", "1",
+                    os.path.join(self.video_dir, "%Y%m%d_%H%M%S.jpg")]
+        else:
+            cmd += ["-i", self.url, "-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
         print("capturing from", masked(self.url), flush=True)
         fails = 0
         while not self.stop:
@@ -666,6 +673,7 @@ def main():
     ap.add_argument("--host", default=os.environ.get("RTSP_HOST", ""))
     ap.add_argument("--port", default=os.environ.get("RTSP_PORT", "554"))
     ap.add_argument("--path", default=os.environ.get("RTSP_PATH", ""))
+    ap.add_argument("--video-dir", default=None, help="record/monitor: also write video key frames here (e.g. /dev/shm/vframes)")
     ap.add_argument("--fan-on", type=int, default=20, help="assumed minutes ON per cycle")
     ap.add_argument("--fan-period", type=int, default=0, help="assumed cycle length in minutes; 0 = find it automatically")
     ap.add_argument("--fan-auto", action="store_true", help="also run the period-free scan even when --fan-period is given")
@@ -680,7 +688,7 @@ def main():
     if a.cmd == "probe":
         return cmd_probe(a)
     live = Live(a.out) if a.cmd == "monitor" else None
-    rec = Recorder(rtsp_url(a), a.out, live.feed if live else None)
+    rec = Recorder(rtsp_url(a), a.out, live.feed if live else None, a.video_dir)
     signal.signal(signal.SIGINT, lambda *_: setattr(rec, "stop", True))
     signal.signal(signal.SIGTERM, lambda *_: setattr(rec, "stop", True))
     rec.run()

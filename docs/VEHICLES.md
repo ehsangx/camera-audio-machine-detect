@@ -1,8 +1,9 @@
 # Vehicle detection from camera sound + video (design and status)
 
-**Status: design + data collection only.** What exists today: the recorder logs a 0.5 s fine-grained audio feature stream
-(`fine.bin`, see below). Everything else on this page is a plan with the reasoning and the hardware limits behind it.
-Nothing here claims accuracy that has not been measured.
+**Status: data collection is running; no accuracy has been measured yet.** Implemented: (a) a 0.5 s fine-grained audio
+feature log (`fine.bin`), (b) key-frame capture from the same RTSP session, (c) `vehicle_watch.py`, a CPU detector
+(MobileNet-SSD via OpenCV DNN) that logs vehicles with a body-colour estimate. Everything else is a plan. Nothing here
+claims accuracy that has not been measured.
 
 ## 1. Goal
 
@@ -37,7 +38,8 @@ Sounds may be near or far, a vehicle may stand with the engine running or just d
 ```
 camera --RTSP--> ffmpeg (one session)
                   |-- audio s16le 8 kHz --> fine features every 0.5 s  --> fine.bin          (implemented)
-                  |-- video key frames (-skip_frame nokey) --> motion gate --> detector --> crops + colour (planned)
+                  |-- video key frames (-skip_frame nokey, ~1 per 4 s) --> /dev/shm --> vehicle_watch.py:
+                  |        motion number --> MobileNet-SSD (car/bus/motorbike/bicycle) --> detections.csv + local crops (implemented)
 fine.bin --> event segmentation --> audio features --> classifier (trained with video labels)   (planned)
 crops    --> make/model/colour review off-device (PC or a larger model)                        (planned)
 ```
@@ -47,6 +49,20 @@ crops    --> make/model/colour review off-device (PC or a larger model)         
 `hvac_listen.py record` now also appends one 436-byte record every 0.5 s to `fine.bin`:
 timestamp, RMS (dBFS), 6 coarse bands 0.8-3.9 kHz (dB), and 400 spectrum bins 19.5-800 Hz at 1.95 Hz resolution,
 quantised to 0.5 dB (`q = clip((dB+120)*2, 0, 255)`). Cost: about 75 MB/day. This is enough for engine harmonics.
+
+### 4.1b Implemented: key frames and the vehicle watcher (measured on the Pi 3)
+
+* One `ffmpeg` process, `-skip_frame nokey`: the camera sends a key frame about every 4 s; decoding them costs about 10 % of one
+  core (measured: 3.95 s user CPU in 40 s). Frames are 960 px wide JPEGs (~133 kB) on a RAM disk and are deleted after processing.
+* MobileNet-SSD (VOC classes: car, bus, motorbike, bicycle; no truck/tractor class) runs in **~0.71 s per frame** at 300x300 with
+  2 threads. A frame-difference number gates the detector (plus every 8th frame as heartbeat).
+* Output: `detections.csv` (time, class, confidence, box, moving flag, colour name, median brightness, IR flag, persons-in-frame
+  count) and local crops. **People are counted but never cropped or stored.**
+* Known limitations measured so far: on a static scene the detector produced a confident false positive (class "boat" on the
+  railing/gate area), which is why only vehicle classes with a minimum box width are accepted and a motion flag is logged;
+  one key frame per 4 s means a fast vehicle may appear in 0-2 frames (audio events are the primary clock).
+* Colour: median hue of saturated pixels in the central body region mapped to 8 names, otherwise black/white/grey by brightness;
+  reported as `ir` when the frame is monochrome (night).
 
 ### 4.2 Planned: audio event analysis
 
@@ -91,7 +107,7 @@ names). The published data contains no images, no audio and no plates.
 
 ## 6. Roadmap
 
-1. (done) fine-grained audio log running.
+1. (done) fine-grained audio log running; key-frame capture and vehicle watcher running.
 2. Collect >= 3 days of `fine.bin`; build the event segmenter and look at the events by eye.
 3. Fix power supply; add key-frame capture + motion gate; save ROI crops locally.
 4. Add the detector (only if CPU/RAM allow); build the labelled audio-event set.
