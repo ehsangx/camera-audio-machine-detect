@@ -17,9 +17,9 @@ dataset in `data/` (numbers in `results.json`, figures in `figures/`).*
 
 | Question | Result | Evidence |
 |---|---|---|
-| Is the **pool pump** audible? | **Yes.** ON/OFF segmentation agrees with the believed schedule on 95.8 % of minutes. | in-sample d' 4.7, block-permutation p = 0.003 (0/300 null >= observed), held-out d' 1.78 and 1.58 (AUC 0.91 / 0.997) |
-| Is there a periodic machine matching the **fan**? | **A very regular periodic source exists, but its period is 81 min, not 60 min**: ON 18.9 +- 0.5 min, OFF 62 min. | BLS SNR 31.5 (null 99 % = 14.2, p = 0.003); period 80.92 +- 0.04 min; odd/even-cycle held-out d' 16.5 |
-| Does the believed *hourly* fan schedule appear? | **No.** | phase scan peak below the permutation-null 95 %; folded profile flat to 0.11 dB |
+| Is the **pool pump** audible? | **Probably, pending ground truth.** The 3 h windows differ from their flanks in many narrow lines, ON/OFF segmentation agrees with the believed schedule on 95.5 % of minutes. | in-sample d' 4.8; block-permutation p = 0.003 (this tests *'the middle 3 h differ from the flanks'*, not *'a pump'*); cross-event held-out d' 1.78 / 1.58 (moderate; n = 1 event per direction, no CI) |
+| Is there a periodic machine matching the **fan**? | **A very regular periodic source exists, but its period is 81 min, not 60 min**: ON about 19 min, OFF about 62 min. | BLS SNR 31.5 (null 99 % = 14.2, p = 0.003, 300 permutations); the same peak on RMS; onset jitter 0.7 min |
+| Does the believed *hourly* fan schedule appear? | **Not found.** | BLS at P = 60 min is far below the peak at 81 min (Fig 9a); hour-folded profile flat to 0.11 dB; detection limit ~1.2 dB per line |
 | Is the 81-min source *the* fan? | **Unconfirmed.** ON length (19 min) matches "20 min", the period does not. | needs a ground-truth switch event (see section 7) |
 
 ![overview](figures/fig1_overview.png)
@@ -101,11 +101,12 @@ randomly permuted (the correct family-wise null for a search over ~10^5 hypothes
 *Fig 2.* ON vs OFF spectra for both windows (same lines in both, which is what a real machine does) and the per-bin
 moderated t; selected lines marked.
 
-Strongest lines (ON - OFF in raw spectral level, 95 % block-bootstrap CI, 15-min blocks, 2 000 resamples):
+Strongest lines (ON - OFF in the 25th-percentile spectrum, 95 % block-bootstrap CI, 15-min blocks, 2 000 resamples). Note: the
+25th percentile of a noise-only bin sits about 5 dB below its mean, while a steady tone is not lowered by it, so these differences
+are **upper bounds** of the change in mean level (by up to ~5 dB); the bootstrap CI also ignores between-event variance (n = 2) and line-selection bias.
 
 | Hz | ON-OFF (dB) | 95 % CI |
 |---:|---:|---|
-| 99.6 | +11.2 | 9.3 - 13.0 |
 | 100.6 | +10.1 | 8.3 - 11.6 |
 | 137.7 | +5.4 | 4.3 - 6.5 |
 | 145.5 | +3.9 | 3.0 - 4.7 |
@@ -113,23 +114,30 @@ Strongest lines (ON - OFF in raw spectral level, 95 % block-bootstrap CI, 15-min
 | 473.6 | +15.9 | 12.5 - 19.2 |
 | 710.0 | +4.8 | 3.1 - 6.6 |
 | 897.5 | +3.8 | 2.7 - 4.9 |
+| 176.8 | +3.4 | 2.3 - 4.4 |
 
-The 99.6/100.6 Hz pair is 2 x the 50 Hz mains frequency (induction-motor hum, 2-pole-pair magnetic noise); 237.3 and
-473.6 Hz are an octave pair (473.6 = 2 x 236.8).
+The ~100 Hz line is 2 x the 50 Hz mains frequency: any 50 Hz load produces it, so it is **not** specific to a pump. The stronger
+structural evidence is the harmonic series 237.3 : 473.6 : 710.0 = 1 : 2 : 3 (710.0/237.3 = 2.99), as expected from one rotating
+source (for example the blade-pass frequency of an impeller and its harmonics). Identifying the mechanism needs more than this audio.
 
 ![pump score](figures/fig3_pump_score.png)
 
-*Fig 3.* Matched-filter score. The segmentation (green) follows the believed schedule (orange); agreement 95.8 % of minutes.
+*Fig 3.* Matched-filter score. The segmentation (green) follows the believed schedule (orange); agreement 95.5 % of minutes.
 (The agreement is partly circular because the schedule trained the filter; Fig 4 removes the circularity.)
 
 ![validation](figures/fig4_pump_validation.png)
 
 *Fig 4.* (a) Whole-pipeline permutation test: ON/OFF 15-min block labels are shuffled inside each event 300 times and the
 entire procedure (line selection with fixed K = 10, scoring, d') is repeated. Null mean 0.71, 99th pct 1.03, max 1.21;
-observed 4.66, so p = 1/301 = 0.0033 (smallest value 300 permutations can give). (b) Cross-event hold-out: lines
+observed 4.39 (top-10 lines), so p = 1/301 = 0.0033 (smallest value 300 permutations can give). The test asks whether the middle 3 h differ from the flanks; it cannot say that the cause is a pump. (b) Cross-event hold-out: lines
 selected on the 15-18 window separate the 03-06 window with d' = 1.78 (AUC 0.91) and vice-versa d' = 1.58 (AUC 0.997).
 Hold-out d' is lower than in-sample d', plausibly because each line set is estimated from a single event (n = 1 per
 direction).
+
+**Statistic used.** For n >= 3 events the moderated t of 3.3 is used; with n = 2 events (this data) `tvals` falls back to
+`D / (sd_ref * sqrt(15/n_on + 15/n_off))`, a z-like score that assumes a ~15-min autocorrelation (the `t_moderated` field in
+`results.json` is therefore a z-like score here). AUC 0.997 together with d' 1.58 is not consistent with Gaussian classes: the
+scores drift inside each class (before vs after flank), so AUC is descriptive only.
 
 **Caveat.** Only two events exist; the believed schedule is the label. A third and fourth event (tomorrow 15-18, 03-06) will
 allow a proper leave-one-event-out estimate.
@@ -141,8 +149,9 @@ allow a proper leave-one-event-out estimate.
 ![fan hourly](figures/fig5_fan.png)
 
 *Fig 5 (top)*: scanning all 60 start minutes, the best statistic (mean of the 4 strongest line t-values) is 1.26 (tonal) and
-1.16 (level), below the 95 % of a permutation null built by rotating each 60-min block independently (2.99 / 2.39);
-p = 1.0. *Fig 6*: a phase-free test of the 1/60 min^-1 Fourier component per bin gives 4 of 1 003 bins with z > 3 (1.35
+1.16 (level), barely above the median of the phase curve (0.98 / 0.87), i.e. no sharp phase peak. (The dashed lines in the figure come
+from a block-rotation surrogate that is **not a valid null**: the wrap-around seam falls on the same minute-of-hour in every block
+and injects coherent hourly structure; do not read p-values from it. The valid test is BLS at P = 60 min, Fig 9a.) *Fig 6*: a phase-free test of the 1/60 min^-1 Fourier component per bin gives 4 of 1 003 bins with z > 3 (1.35
 expected) at inconsistent phases (minute 50, 34, 44, 44), i.e. no coherent hourly structure. *Fig 7*: the hour-folded
 broadband tonal prominence varies by 0.11 dB (median SEM 0.07 dB).
 
@@ -150,7 +159,8 @@ broadband tonal prominence varies by 0.11 dB (median SEM 0.07 dB).
 
 Detection limit (Fig 8): with 20 hourly cycles, sd of the per-cycle ON-OFF difference 0.86 dB, Bonferroni alpha = 0.05/1003
 and 80 % power, a line must differ by >= 1.17 dB to be detectable; 72 cycles (3 days) -> 0.53 dB, 168 cycles -> 0.33 dB.
-So a hypothetical hourly fan weaker than ~1 dB in a spectral line is not excluded.
+So a hypothetical hourly fan weaker than ~1 dB in a spectral line is not excluded. (The Bonferroni factor covers frequency bins only,
+not the search over 60 phases, so the true limit is somewhat higher.)
 
 ![power](figures/fig8_power.png)
 
@@ -158,11 +168,11 @@ So a hypothetical hourly fan weaker than ~1 dB in a spectral line is not exclude
 
 ![bls](figures/fig9_period_scan.png)
 
-*Fig 9.* (a) BLS periodogram: a single dominant peak at **81 min** with sub-/super-harmonics at 40.5, 121, 162, 202 min
-(box patterns repeat at integer multiples), nowhere near 60 min. Band-level SNR 31.5 vs permutation-null 99 % of 14.2
+*Fig 9.* (a) BLS periodogram: a single dominant peak at **81 min** with aliases at 40.5, 121 (1.5 P), 162 (2 P), 202 (2.5 P) min, nowhere near 60 min. Band-level SNR 31.5 vs permutation-null 99 % of 14.2
 (p = 0.003, 300 permutations); RMS gives 63.0 vs 28.9 (p = 0.01, 100 permutations). (b) The fitted 19-min boxes on the RMS.
 
-Edge timing (15 pulses, linear fit `onset_k = a + P k`):
+Edge timing (15 pulses; the first one is the truncated pulse at the start of the recording and one slot, ~14:34, is not detected
+in the RMS series (13:13 -> 15:55 = 2 P), so 'regular' means the 15 detected pulses fit the grid; linear fit `onset_k = a + P k`):
 
 | Quantity | Value |
 |---|---|
@@ -180,10 +190,10 @@ environmental coincidence.
 
 *Fig 10.* Spectrum of the source: ON-OFF difference averaged over 15 cycles with 95 % CI (a), paired t per bin (b), folded RMS (c).
 It is **broadband**: +4.8 dB (20-100 Hz), +4.3 (100-300), +2.1 (300-600), +1.7 (600-1000); 88.6 % of bins differ at
-p < 0.001 (paired t over cycles); the strongest bin is 24.4 Hz (+22 dB, t = 200), consistent with a large rotating machine /
-air handler heard through the building structure. Learned signature lines: 24.4, 42.0, 57.6, 96.7, 122.1, 165.0, 222.7, 283.2 Hz.
-Odd-cycle -> even-cycle hold-out d' = 16.5 and even -> odd 16.5 (in-sample 16.5); this is the hold-out the
-pump still lacks.
+p < 0.001 (paired t over cycles); the strongest bin is 24.4 Hz (+22 dB, t = 200), consistent with a large rotating machine; 24.4 Hz = 1 465 rpm, a plausible shaft speed of a 4-pole induction motor (96.7 Hz and 122.1 Hz
+are close to its 4th and 5th harmonics, to be checked with more data). This remains a hypothesis. Learned signature lines: 24.4, 42.0, 57.6, 96.7, 122.1, 165.0, 222.7, 283.2 Hz.
+Odd/even-cycle split d' = 16.5 / 16.5. **This is a consistency check, not independent validation**: the box labels come from a BLS fit
+on the same data (band level) from which the spectral features are built; only the line selection is held out.
 
 ![edges](figures/fig11_edges.png)
 
@@ -203,8 +213,8 @@ pump still lacks.
 3. The permutation nulls use block shuffles that ignore diurnal structure; the pump test is therefore not a test against
    all conceivable day/night confounders (the two windows are at different times of day, which is why the cross-event
    hold-out matters).
-4. The fan hourly null (block rotation) is deliberately conservative for the *hourly* hypothesis; use the detection limit
-   (section 5.1) to judge what was excluded.
+4. The block-rotation surrogate drawn in Fig 5 is not a valid null (section 5.1); the hourly hypothesis is judged by BLS at 60 min and
+   by the detection limit.
 5. Single microphone: no localisation, no distinction between machine and any other periodic source.
 
 ## 7. Next steps

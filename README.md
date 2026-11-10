@@ -28,7 +28,7 @@ belief - falls back to a period-free search. That is why the report is careful t
 
 | Source | Result | Status |
 |---|---|---|
-| Pool pump (believed ON 03-06 and 15-18) | detected: schedule agreement 95.8 %, block-permutation p = 0.003, held-out d' 1.6-1.8 | supported by two events; more days needed |
+| Pool pump (believed ON 03-06 and 15-18) | probable: the 3 h windows differ from their flanks (permutation p = 0.003), schedule agreement 95.5 %, cross-event held-out d' 1.6-1.8 (moderate) | two events only, no ground truth; more days needed |
 | Fan (believed 20 min ON / 40 min OFF per hour) | **not detected under that schedule** (no hourly structure; detection limit ~1.2 dB per line) | negative result, not proof of absence |
 | A perfectly regular periodic source: 80.92 +- 0.04 min period, ON 18.9 min | found without assuming a period (BLS p = 0.003) | **unconfirmed** whether it is the fan; needs a ground-truth switch event |
 
@@ -38,9 +38,9 @@ test.**
 ## Vehicles (work in progress)
 
 The goal is to recognise cars, motorcycles, trucks and tractors - near or far, passing or standing with the engine running -
-from the audio, with the camera image as a second sensor, and if possible to estimate type, colour and model.
-See [docs/VEHICLES.md](docs/VEHICLES.md). What exists today: a 0.5 s audio feature log (`fine.bin`) written by the recorder.
-What is planned: event segmentation, engine-harmonic features, video-as-teacher labelling, off-device make/model review.
+from the **audio (primary sensor)**, using the camera image only to **validate** the audio events, and if possible to estimate type, colour and model. Several microphones for direction-of-arrival are planned.
+See [docs/VEHICLES.md](docs/VEHICLES.md). What exists today: a 0.5 s audio feature log (`fine.bin`), key-frame capture and `vehicle_watch.py` (CPU detector + colour, used for validation).
+What is planned: audio event segmentation, engine-harmonic tracking, video-validated labels, off-device make/model review, a microphone array.
 
 ### Hardware limits we design around
 

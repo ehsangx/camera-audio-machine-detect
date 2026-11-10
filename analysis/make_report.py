@@ -111,8 +111,7 @@ def topk_sig(F, prs, sd, K=10):
     t = np.nan_to_num(t, nan=-9)
     pt = np.pad(t, 3, constant_values=-9)
     loc = t >= np.lib.stride_tricks.sliding_window_view(pt, 7).max(axis=1)
-    cand = np.where(loc & (t > 0))[0]
-    cand = cand[np.argsort(t[cand])[::-1][:K]]
+    cand = h.nms(t, np.where(loc & (t > 0))[0], K)
     offall = np.any([f for _, f in prs], axis=0)
     mu, sdv = F[offall][:, cand].mean(0), F[offall][:, cand].std(0) + 1e-3
     w = np.maximum(t[cand], 1e-3); w = w / w.sum()
@@ -294,28 +293,8 @@ for k, c in curves.items():
     mad = 1.4826 * np.nanmedian(abs(c - np.nanmedian(c))) + 1e-6
     R["fan"][k] = dict(best_phase=int(np.nanargmax(c)), peak=float(np.nanmax(c)), median=float(np.nanmedian(c)),
                        robust_confidence=float((np.nanmax(c) - np.nanmedian(c)) / mad))
-# permutation null of the peak: each 60-min block is circularly rotated by an independent random amount
-NPF = 150
-nullpk = {k: [] for k in feats}
-hours_block = (tm - tm[0]) // 60
-for _ in range(NPF):
-    perm = np.arange(T)
-    for b in np.unique(hours_block):
-        idx = np.flatnonzero(hours_block == b)
-        perm[idx] = np.roll(idx, rng.integers(0, len(idx)))
-    for k, F in feats.items():
-        Fp = F[perm]
-        c = np.full(60, np.nan)
-        for ph in range(0, 60, 2):                      # 30 phases are enough for the null peak
-            pr = fan_pairs(ph)
-            if len(pr) >= 3:
-                t, _ = h.tvals(Fp, pr, sdref[k])
-                c[ph] = np.sort(np.nan_to_num(t, nan=-9))[-4:].mean()
-        nullpk[k].append(np.nanmax(c))
-for k in feats:
-    a = np.array(nullpk[k])
-    R["fan"][k]["perm_null"] = dict(n=NPF, p95=float(np.percentile(a, 95)), p99=float(np.percentile(a, 99)),
-                                    p_value=float((1 + (a >= R["fan"][k]["peak"]).sum()) / (1 + NPF)))
+# (a block-rotation surrogate was removed: its wrap-around seam creates coherent hourly structure, so it is not a valid null.
+#  The hourly hypothesis is judged by BLS at P = 60 min, fig9, and by the detection limit, fig8.)
 
 # phase-free test: Fourier amplitude at the 60-min period per bin vs neighbouring periods
 Xf = np.where(np.isnan(FT), 0, FT)                      # gaps -> 0 (only edges)
@@ -336,8 +315,7 @@ R["fan"]["period60_bins_z_gt3"] = [dict(hz=round(float(freq[i]), 1), z=round(flo
 fig, ax = plt.subplots(2, 2, figsize=(11, 6.5))
 for k, a_ in zip(feats, ax[0]):
     a_.plot(range(60), curves[k], "k.-")
-    a_.axhline(np.percentile(nullpk[k], 95), color="orange", ls="--", label="perm null 95%")
-    a_.axhline(np.percentile(nullpk[k], 99), color="r", ls="--", label="perm null 99%")
+    a_.axhline(np.nanmedian(curves[k]), color="gray", ls="--", label="median over phases")
     a_.set_title("Fig 5. Fan phase scan - %s features" % k); a_.set_xlabel("assumed start minute of the hour"); a_.set_ylabel("mean of 4 strongest line t-values"); a_.legend(fontsize=7)
 ax[1, 0].plot(freq, zline, lw=.6, color="k"); ax[1, 0].axhline(3, color="orange", ls="--"); ax[1, 0].axhline(4, color="r", ls="--")
 ax[1, 0].set_xlabel("Hz"); ax[1, 0].set_ylabel("z of 60-min Fourier line"); ax[1, 0].set_title("Fig 6a. Phase-free test: 1/60 min^-1 component per frequency bin")

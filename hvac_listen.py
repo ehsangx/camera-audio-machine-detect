@@ -240,14 +240,24 @@ def tvals(F, pairs, sd_ref):
     return D.mean(0) / (sd_ref * np.sqrt(15.0 / max(non, 1) + 15.0 / max(noff, 1)) + 1e-3), n
 
 
+def nms(t, cand, K, sep=3):
+    """Greedy non-maximum suppression: max-pooled features make a line a plateau of equal t values, so keep one bin per line."""
+    keep = []
+    for i in cand[np.argsort(t[cand])[::-1]]:
+        if all(abs(int(i) - j) > sep for j in keep):
+            keep.append(int(i))
+        if len(keep) >= K:
+            break
+    return np.array(keep, dtype=int)
+
+
 def build_sig(F, pairs, sd_ref, K=25):
     t, n = tvals(F, pairs, sd_ref)
     t = np.nan_to_num(t, nan=-9)
     tmin = max(1.0, np.median(t) + 5 * 1.4826 * np.median(np.abs(t - np.median(t))))   # 5 robust sigmas above the noise bins
     pt = np.pad(t, 3, constant_values=-9)
     loc = t >= sliding_window_view(pt, 7).max(axis=1)          # one bin per spectral line
-    cand = np.where(loc & (t > tmin))[0]
-    cand = cand[np.argsort(t[cand])[::-1][:K]]
+    cand = nms(t, np.where(loc & (t > tmin))[0], K)
     if len(cand) < 2:
         return None, t
     offall = np.any([f for _, f in pairs], axis=0)
