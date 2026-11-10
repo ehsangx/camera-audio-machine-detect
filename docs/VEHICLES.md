@@ -139,3 +139,14 @@ The camera has one microphone, so direction cannot be estimated from it. A small
   causes spatial aliasing at high frequencies. Mount mics away from the building's own noise sources and out of the wind.
 * **Use:** approaching vs receding, left vs right of the building, and separating a vehicle from the periodic machines inside the
   building (which arrive from a fixed bearing). Bearing + time also lets the video check whether the object seen is the one heard.
+
+## 8. Field check, first day (status)
+
+* The camera turned out to sit **indoors behind a window**, looking at a balcony; no road is inside the frame. By day the
+  scene is static (frame-difference motion ~0), at night the IR light reflects off the glass and the outside is invisible.
+* Result of the video watcher over ~11 h: **0 true vehicle detections**; 4 false positives, all night-time boxes covering
+  the whole frame (`motorbike`, conf 0.40-0.43). Boxes larger than half the frame are now rejected (`--max-area`).
+* Consequence: with this camera position video **cannot validate** audio events. Labels must come from re-aiming the
+  camera at the road/entrance, or from a short hand-written log of real passes.
+* Audio: a naive threshold on `fine.bin` (band level > 4 dB above a 5-min median for >= 3 s) gives a few events per hour;
+  they are unlabelled candidates, not confirmed vehicles.

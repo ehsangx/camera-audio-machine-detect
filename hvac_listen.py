@@ -352,7 +352,7 @@ def bls_scan(y, mloc, valid, periods=range(30, 241), on_lens=range(12, 31), nper
     sd_ = 1.4826 * np.median(np.abs(y[ok] - med_)) + 1e-6
     z0 = np.clip((y - med_) / sd_, -4, 4)
 
-    def best(z):
+    def best(z, ok=ok):
         zz = np.where(ok, z, 0.0)
         tot, totn = zz.sum(), ok.sum()
         top, curve = (-1e9, None), []
@@ -390,9 +390,10 @@ def bls_scan(y, mloc, valid, periods=range(30, 241), on_lens=range(12, 31), nper
     null = []
     for _ in range(nperm):
         order = rng.permutation(nb)
-        zp = z0.copy()
+        zp, okp = z0.copy(), ok.copy()          # missing minutes must travel with their block, else NaN poisons the null
         zp[:nb * blk] = z0[:nb * blk].reshape(nb, blk)[order].ravel()
-        null.append(best(zp)[0][0])
+        okp[:nb * blk] = ok[:nb * blk].reshape(nb, blk)[order].ravel()
+        null.append(best(zp, okp)[0][0])
     null = np.array(null)
     return dict(period=int(P), phase=int(ph), on_len=int(L), snr=float(snr), null_p99=float(np.percentile(null, 99)),
                 p=float((1 + (null >= snr).sum()) / (1 + nperm)), curve=curve, periods=list(periods))

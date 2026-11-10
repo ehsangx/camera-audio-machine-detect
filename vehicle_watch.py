@@ -66,6 +66,7 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/vehicles"))
     ap.add_argument("--conf", type=float, default=0.40)
     ap.add_argument("--min-width", type=int, default=30, help="ignore boxes narrower than this (px of the 960-px frame)")
+    ap.add_argument("--max-area", type=float, default=0.5, help="ignore boxes larger than this fraction of the frame")
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--max-crops", type=int, default=4000)
     a = ap.parse_args()
@@ -77,7 +78,7 @@ def main():
     cdir = os.path.join(a.out, "crops")
     os.makedirs(cdir, exist_ok=True)
     csv_path = os.path.join(a.out, "detections.csv")
-    new = not os.path.exists(csv_path)
+    new = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
     f = open(csv_path, "a", newline="")
     w = csv.writer(f)
     if new:
@@ -121,6 +122,8 @@ def main():
                 x0, y0, x1, y1 = (d[3:7] * np.array([W, H, W, H])).astype(int)
                 x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, W), min(y1, H)
                 if x1 - x0 < a.min_width or y1 - y0 < 15:
+                    continue
+                if (x1 - x0) * (y1 - y0) > a.max_area * W * H:      # a box covering the whole frame is the scene, not a vehicle
                     continue
                 moving = False
                 if motion_mask is not None:
