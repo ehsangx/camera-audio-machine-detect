@@ -92,6 +92,26 @@ def minute_feature(x):
     return spec, rms
 
 
+# --- fine-grained (0.5 s) event log, used for vehicles / transients (the minute spectra above reject transients) ---
+FB0, FB1 = 10, 410                       # rfft(n=4096) bins 10..409  = ~19.5 .. 800 Hz (1.95 Hz/bin)
+HI_EDGES = np.geomspace(410, 2000, 7).astype(int)     # 6 coarse bands 0.8-3.9 kHz
+REC_FINE = np.dtype([("ts", "<f8"), ("rms", "<f4"), ("hi", "<f4", (6,)), ("q", "u1", (FB1 - FB0,))])
+_HANN = np.hanning(4000).astype(np.float32)
+
+
+def fine_feature(x16, ts):
+    """0.5 s of int16 audio -> one REC_FINE record. q = clip((dB+120)*2, 0, 255): 0.5 dB steps, 400 bytes."""
+    x = x16.astype(np.float32) / 32768.0
+    rms = 20 * np.log10(float(np.sqrt(np.mean(x ** 2))) + 1e-9)
+    P = np.abs(np.fft.rfft((x - x.mean()) * _HANN, n=4096)) ** 2 / float((_HANN ** 2).sum())
+    db = 10 * np.log10(P[FB0:FB1] + 1e-14)
+    r = np.zeros(1, REC_FINE)
+    r["ts"], r["rms"] = ts, rms
+    r["hi"] = [10 * np.log10(P[a:b].mean() + 1e-14) for a, b in zip(HI_EDGES[:-1], HI_EDGES[1:])]
+    r["q"] = np.clip((db + 120) * 2, 0, 255).astype(np.uint8)
+    return r
+
+
 class Recorder:
     def __init__(self, url, out, on_minute=None):
         self.url, self.out, self.on_minute = url, out, on_minute
@@ -100,6 +120,7 @@ class Recorder:
         with open(os.path.join(out, "meta.json"), "w") as f:
             json.dump(dict(sr=SR, nfft=NFFT, k0=K0, nb=NB), f)
         self.fn = os.path.join(out, "feat.bin")
+        self.fine_f = open(os.path.join(out, "fine.bin"), "ab")
 
     def _flush(self, minute, buf):
         if not buf:
@@ -153,9 +174,13 @@ class Recorder:
                 got[0] += len(d)
                 m = int(time.time() // 60)
                 if m != cur:
+                    self.fine_f.flush()
                     self._flush(cur, buf)
                     cur, buf = m, []
-                buf.append(np.frombuffer(d[: len(d) // 2 * 2], np.int16))
+                chunk = np.frombuffer(d[: len(d) // 2 * 2], np.int16)
+                buf.append(chunk)
+                if len(chunk) == SR // 2:
+                    self.fine_f.write(fine_feature(chunk, time.time()).tobytes())
             proc.kill()
             if self.stop:
                 break
