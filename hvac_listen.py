@@ -451,6 +451,11 @@ def cmd_analyze(a):
     T = len(X)
     off = a.utc_offset if a.utc_offset is not None else time.localtime(m0 * 60).tm_gmtoff // 60
     mloc = m0 + off + np.arange(T)
+    for rng_ in (a.exclude or []):                     # e.g. "2026-11-12 10:00/2026-11-12 19:10" (local time)
+        t0_, t1_ = [int(datetime.strptime(x.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp() // 60)
+                    for x in rng_.split("/")]
+        X[(mloc >= t0_) & (mloc < t1_)] = np.nan
+        print("excluded %s (%d min)" % (rng_, ((mloc >= t0_) & (mloc < t1_)).sum()))
     valid = ~np.isnan(X[:, 0])
 
     def fmt(i):
@@ -475,23 +480,59 @@ def cmd_analyze(a):
     # ---------------- FAN ----------------
     fan_P, fan_L = max(a.fan_period, 60 if a.fan_period <= 0 else a.fan_period), a.fan_on
     lvl = np.nanmean(X, axis=1)
-    bl = bls_scan(lvl, mloc, valid) if (a.fan_period <= 0 or a.fan_auto) else None
+    # remove slow level changes (weather, traffic, other machines running for hours) with a 3-h running median,
+    # so the box search sees only the short ON/OFF steps
+    lvl = lvl - np.array([np.nanmedian(lvl[max(0, i - 90):i + 91]) if np.isfinite(lvl[max(0, i - 90):i + 91]).sum() > 45
+                          else np.nan for i in range(len(lvl))])
+    # Split the record at outages (> 2 h without data). A power cut can restart the machine's own timer, so every
+    # segment gets its own phase; the period is learned on the longest segment.
+    vi = np.flatnonzero(valid)
+    seg_bounds = [(int(g[0]), int(g[-1]) + 1) for g in np.split(vi, np.flatnonzero(np.diff(vi) > 120) + 1)]
+    l0, l1 = max(seg_bounds, key=lambda b_: b_[1] - b_[0])
+    mloc_f = mloc.copy()                                  # phase-aligned minute index used by the fan analysis
+    bl = bls_scan(lvl[l0:l1], mloc[l0:l1], valid[l0:l1]) if (a.fan_period <= 0 or a.fan_auto) else None
     if bl:
         print("\n=== FAN: period-free box-least-squares scan (30-240 min) on the band level ===")
+        if len(seg_bounds) > 1:
+            print("  %d data segments (outages > 2 h); scan on the longest: %s - %s" % (len(seg_bounds), fmt(l0), fmt(l1)))
         print("  best: period %d min, ON %d min, start :%02d (mod period)  SNR=%.1f  null99%%=%.1f  p=%.3f" %
               (bl["period"], bl["on_len"], bl["phase"], bl["snr"], bl["null_p99"], bl["p"]))
         if bl["p"] < 0.05:
             fan_P, fan_L = bl["period"], bl["on_len"]
             print("  -> significant periodic ON/OFF source. Using period=%d min, ON=%d min (a 60-min period is %s)" %
                   (fan_P, fan_L, "consistent" if fan_P == 60 else "NOT what the data show"))
+            ok_ = valid & ~np.isnan(lvl)
+            md_ = np.median(lvl[ok_])
+            z_ = np.clip((lvl - md_) / (1.4826 * np.median(np.abs(lvl[ok_] - md_)) + 1e-6), -4, 4)
+
+            def seg_phase(s0, s1):
+                best_ = (-1e9, 0)
+                for k in range(fan_P):
+                    inn = (((mloc[s0:s1] - k) % fan_P) < fan_L) & ok_[s0:s1]
+                    out_ = ~inn & ok_[s0:s1]
+                    if inn.sum() >= fan_L and out_.sum() >= fan_L:
+                        best_ = max(best_, (z_[s0:s1][inn].mean() - z_[s0:s1][out_].mean(), k))
+                return best_[1]
+            k_ref = seg_phase(l0, l1)
+            for s0, s1 in seg_bounds:
+                if valid[s0:s1].sum() < 2 * fan_P:
+                    print("  segment %s - %s too short to phase (%d min): not used for the fan" %
+                          (fmt(s0), fmt(s1), valid[s0:s1].sum()))
+                    mloc_f[s0:s1] = -10 ** 9 - np.arange(s1 - s0) * fan_P   # every minute its own cycle: never paired
+                    continue
+                k = seg_phase(s0, s1)
+                mloc_f[s0:s1] = mloc[s0:s1] - k + k_ref
+                if len(seg_bounds) > 1:
+                    print("  segment %s - %s: cycle start :%02d mod %d (shift %+d min vs longest)" %
+                          (fmt(s0), fmt(s1), k % fan_P, fan_P, ((k - k_ref + fan_P // 2) % fan_P) - fan_P // 2))
         else:
             print("  -> no significant periodic pattern in the broadband level; using the assumed schedule")
     print("\n=== FAN: %d min ON every %d min, scanning %d phases ===" % (fan_L, fan_P, fan_P))
-    best = None
+    cands = []
     for kind, F in feats.items():
         curve = np.full(fan_P, np.nan)
         for ph in range(fan_P):
-            pr = fan_pairs(mloc, valid, ph, fan_L, fan_P)
+            pr = fan_pairs(mloc_f, valid, ph, fan_L, fan_P)
             if len(pr) >= 3:
                 t, _ = tvals(F, pr, sdref[kind])
                 curve[ph] = np.sort(np.nan_to_num(t, nan=-9))[-4:].mean()   # strongest lines
@@ -501,26 +542,35 @@ def cmd_analyze(a):
         conf = (np.nanmax(curve) - np.nanmedian(curve)) / mad
         print("  [%s] best start = :%02d  peak=%.1f  phase-curve confidence=%.1f"
               % (kind, np.nanargmax(curve), np.nanmax(curve), conf))
-        if best is None or conf > best[0]:
-            best = (conf, kind, int(np.nanargmax(curve)))
+        cands.append((conf, kind, int(np.nanargmax(curve))))
     fan_mask = np.zeros(T, bool)
-    if best is None:
-        print("  not enough full cycles yet.")
-    else:
-        conf, kind, ph = best
-        F, pr = feats[kind], fan_pairs(mloc, valid, ph, fan_L, fan_P)
+    best = None
+    for conf, kind, ph in cands:
+        F, pr = feats[kind], fan_pairs(mloc_f, valid, ph, fan_L, fan_P)
         sig, _ = build_sig(F, pr, sdref[kind])
         for _ in range(3 if sig is not None else 0):            # refine the phase on the learned signature
             sc0 = score(F, sig)
-            prof = np.array([np.nanmean(sc0[(mloc % fan_P) == k]) for k in range(fan_P)])
+            prof = np.array([np.nanmean(sc0[(mloc_f % fan_P) == k]) for k in range(fan_P)])
             gain = [np.mean(np.take(prof, np.arange(p_, p_ + fan_L), mode="wrap")) -
                     np.mean(np.take(prof, np.arange(p_ + fan_L, p_ + fan_P), mode="wrap")) for p_ in range(fan_P)]
             ph2 = int(np.argmax(gain))
-            pr2 = fan_pairs(mloc, valid, ph2, fan_L, fan_P)
+            pr2 = fan_pairs(mloc_f, valid, ph2, fan_L, fan_P)
             sig2, _ = build_sig(F, pr2, sdref[kind])
             if sig2 is None:
                 break
             ph, pr, sig = ph2, pr2, sig2
+        cvk = cv_dprime(F, pr, sdref[kind], 5) if sig is not None else float("nan")
+        print("  [%s] after refinement: start :%02d  cross-validated d' = %.2f" % (kind, ph, cvk))
+        key = cvk if not np.isnan(cvk) else conf * 1e-3     # choose by held-out evidence, not by phase confidence
+        if sig is not None and (best is None or key > best[0]):
+            best = (key, conf, kind, ph, pr, sig)
+    if best is None:
+        print("  not enough full cycles yet (or no lines stand out).")
+        sig = None
+    else:
+        _, conf, kind, ph, pr, sig = best
+        F = feats[kind]
+    if best is not None:
         if sig is None:
             print("  no frequency lines stand out -> no narrow-band signature (the source may be broadband: see the level scan above).")
         else:
@@ -546,7 +596,8 @@ def cmd_analyze(a):
                            phase=ph, on_len=fan_L, period=fan_P),
                       open(os.path.join(a.out, "sig_fan.json"), "w"), indent=1)
             if conf > 4 and (np.isnan(cv) or cv > 0.8):
-                fan_mask = ((mloc - ph) % fan_P) < fan_L + 2         # mask when learning the pump
+                # mask the DETECTED fan periods (+-3 min), not the nominal phase: the cycle drifts after outages
+                fan_mask = np.convolve(st.astype(float), np.ones(7), "same") > 0
 
     # ---------------- PUMP ----------------
     print("\n=== PUMP: ON during %s ===" % a.pump_windows)
@@ -563,7 +614,9 @@ def cmd_analyze(a):
             sig, t = build_sig(F, pr, sdref[kind])
             if sig is None:
                 continue
-            sc = roll(score(F, sig), 15)
+            raw = score(F, sig)
+            raw[fan_mask] = np.nan                     # fan minutes carry no pump evidence: hold the state
+            sc = roll(raw, 15)
             d = dprime(sc, pr)[0]
             cv = cv_dprime(F, pr, sdref[kind], 15)
             print("  [%s] d'=%.2f  cross-validated d'=%.2f" % (kind, d, cv))
@@ -624,11 +677,14 @@ class Live:
                 self.sig[n] = s
         if not self.sig:
             sys.exit("no sig_*.json found: run 'analyze' first")
+        self.fan_quiet = 99                                   # minutes since the fan was last ON
         print("loaded signatures:", ", ".join("%s (d'=%.1f)" % (n, s["dprime"]) for n, s in self.sig.items()), flush=True)
 
     def feed(self, ts, spec):
         ton = None
         for n, s in self.sig.items():
+            if n == "pump" and "fan" in self.sig and self.fan_quiet < 4:
+                continue                                      # fan ON (or just off): hold the pump state
             if s["kind"] == "tonal":
                 if ton is None:
                     ton = maxpool3(prominence(spec[None, :]))[0]
@@ -645,6 +701,8 @@ class Live:
                 new = True
             elif s["on"] and sm < s["thr_lo"]:
                 new = False
+            if n == "fan":
+                self.fan_quiet = 0 if new else self.fan_quiet + 1
             t = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
             if new != s["on"]:
                 s["on"] = new
@@ -689,6 +747,8 @@ def main():
     ap.add_argument("--fan-period", type=int, default=0, help="assumed cycle length in minutes; 0 = find it automatically")
     ap.add_argument("--fan-auto", action="store_true", help="also run the period-free scan even when --fan-period is given")
     ap.add_argument("--pump-windows", default="3-6,15-18", help="hours, local time")
+    ap.add_argument("--exclude", action="append", help="'YYYY-mm-dd HH:MM/YYYY-mm-dd HH:MM' local time range to ignore "
+                                                       "(e.g. an abnormal stretch); can be repeated")
     ap.add_argument("--fmax-sig", type=int, default=1000, help="upper frequency (Hz) for the signature search")
     ap.add_argument("--utc-offset", type=int, default=None, help="minutes east of UTC, e.g. 60 for UTC+01:00")
     a = ap.parse_args()
